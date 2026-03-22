@@ -1,8 +1,19 @@
 #!/usr/bin/env node
 /**
  * Apple Music Playlist Downloader
- * Usage: node download.js <playlist_url> [output_dir]
- * Example: node download.js https://music.apple.com/us/playlist/swim/pl.u-PDb40oVue8DlLM9
+ *
+ * Usage:
+ *   node download.js <playlist_url> [options]
+ *
+ * Options:
+ *   --source youtube   Download from YouTube (default, requires access to YouTube)
+ *   --source bilibili  Download from Bilibili (works in China)
+ *   --output <dir>     Output directory (default: ./songs)
+ *
+ * Examples:
+ *   node download.js https://music.apple.com/us/playlist/swim/pl.u-xxx
+ *   node download.js https://music.apple.com/us/playlist/swim/pl.u-xxx --source bilibili
+ *   node download.js https://music.apple.com/us/playlist/swim/pl.u-xxx --output ~/Desktop/songs
  */
 
 const https = require("https");
@@ -10,24 +21,34 @@ const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const util = require("util");
-const yts = require("yt-search");
 
 const execFileAsync = util.promisify(execFile);
 const ytdlpBin = path.resolve(__dirname, "node_modules/youtube-dl-exec/bin/yt-dlp");
 
-// ── 1. Fetch Apple Music playlist page ──────────────────────────────────────
+// ── Parse CLI arguments ───────────────────────────────────────────────────────
+
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const result = { url: null, source: "youtube", output: "./songs" };
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--source") result.source = args[++i];
+    else if (args[i] === "--output") result.output = args[++i];
+    else if (!args[i].startsWith("--")) result.url = args[i];
+  }
+  return result;
+}
+
+// ── 1. Fetch and parse Apple Music playlist ───────────────────────────────────
 
 function fetchPage(url) {
   return new Promise((resolve, reject) => {
-    const options = {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    };
     https
-      .get(url, options, (res) => {
+      .get(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+      }, (res) => {
         let data = "";
         res.on("data", (chunk) => (data += chunk));
         res.on("end", () => resolve(data));
@@ -37,11 +58,10 @@ function fetchPage(url) {
 }
 
 function parsePlaylist(html) {
-  // Extract playlist name
   const nameMatch = html.match(/"name":"([^"]+)","kind":"playlist"/);
   const playlistName = nameMatch ? nameMatch[1] : "playlist";
 
-  // Extract songs (find name after artistName, deduplicate)
+  // Extract songs by pairing each artistName with the nearest following name field
   const pattern = /"artistName":"([^"]+)".*?"name":"([^"]+)"/gs;
   const seen = new Set();
   const songs = [];
@@ -56,43 +76,47 @@ function parsePlaylist(html) {
   return { playlistName, songs };
 }
 
-// ── 2. Search YouTube ────────────────────────────────────────────────────────
-
-async function searchYouTube(songName, artist) {
-  const r = await yts(`${songName} ${artist}`);
-  if (!r.all || r.all.length === 0) return null;
-  return r.all[0].url;
-}
-
-// ── 3. Download as MP3 ───────────────────────────────────────────────────────
+// ── 2. Search and download ────────────────────────────────────────────────────
 
 function sanitize(str) {
   return str.replace(/[/\\?%*:|"<>]/g, "-");
 }
 
-async function downloadMp3(videoUrl, outputPath) {
+async function downloadFromYouTube(song, outputPath) {
+  const yts = require("yt-search");
+  const r = await yts(`${song.name} ${song.artist}`);
+  if (!r.all || r.all.length === 0) throw new Error("No results on YouTube");
+  const videoUrl = r.all[0].url;
+  console.log("  -> YouTube:", videoUrl);
   await execFileAsync(ytdlpBin, [
-    "--extract-audio",
-    "--audio-format", "mp3",
-    "--audio-quality", "0",
-    "--no-update",
-    "-o", outputPath,
-    videoUrl,
+    "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0",
+    "--no-update", "-o", outputPath, videoUrl,
   ]);
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+async function downloadFromBilibili(song, outputPath) {
+  // Use yt-dlp's built-in bilisearch extractor
+  const query = `bilisearch1:${song.name} ${song.artist}`;
+  console.log("  -> Bilibili search:", `${song.name} ${song.artist}`);
+  await execFileAsync(ytdlpBin, [
+    "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0",
+    "--no-update", "-o", outputPath, query,
+  ]);
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const playlistUrl = process.argv[2];
-  const outputDir = path.resolve(process.argv[3] || "./songs");
+  const { url: playlistUrl, source, output: outputDir } = parseArgs();
 
   if (!playlistUrl) {
-    console.error("Usage: node download.js <apple_music_playlist_url> [output_dir]");
+    console.log("Usage: node download.js <apple_music_playlist_url> [--source youtube|bilibili] [--output <dir>]");
     process.exit(1);
   }
 
+  console.log(`Source: ${source === "bilibili" ? "Bilibili (China-friendly)" : "YouTube"}`);
   console.log("Fetching playlist:", playlistUrl);
+
   const html = await fetchPage(playlistUrl);
   const { playlistName, songs } = parsePlaylist(html);
 
@@ -101,49 +125,48 @@ async function main() {
     process.exit(1);
   }
 
+  const resolvedOutput = path.resolve(outputDir);
   console.log(`Playlist: ${playlistName}`);
-  console.log(`Total songs: ${songs.length}\n`);
+  console.log(`Total: ${songs.length} songs`);
+  console.log(`Output: ${resolvedOutput}\n`);
 
-  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+  if (!fs.existsSync(resolvedOutput)) fs.mkdirSync(resolvedOutput, { recursive: true });
 
   let downloaded = 0, skipped = 0, failed = 0;
 
   for (let i = 0; i < songs.length; i++) {
-    const { name, artist } = songs[i];
+    const song = songs[i];
     const prefix = `(${i + 1}/${songs.length})`;
-    const safeTitle = sanitize(`${name} - ${artist}`);
-    const outputPath = path.join(outputDir, safeTitle + ".mp3");
+    const safeTitle = sanitize(`${song.name} - ${song.artist}`);
+    const outputPath = path.join(resolvedOutput, safeTitle + ".mp3");
 
     if (fs.existsSync(outputPath)) {
-      console.log(`${prefix} [SKIP] ${name} - ${artist}`);
+      console.log(`${prefix} [SKIP] ${song.name} - ${song.artist}`);
       skipped++;
       continue;
     }
 
-    console.log(`${prefix} Searching: ${name} - ${artist}`);
-    const videoUrl = await searchYouTube(name, artist);
-
-    if (!videoUrl) {
-      console.log(`${prefix} [NOT FOUND] ${name} - ${artist}`);
-      failed++;
-      continue;
-    }
+    console.log(`${prefix} Downloading: ${song.name} - ${song.artist}`);
 
     try {
-      await downloadMp3(videoUrl, outputPath);
+      if (source === "bilibili") {
+        await downloadFromBilibili(song, outputPath);
+      } else {
+        await downloadFromYouTube(song, outputPath);
+      }
       console.log(`${prefix} [DONE] ${safeTitle}.mp3`);
       downloaded++;
     } catch (err) {
-      console.log(`${prefix} [ERROR] ${name}: ${err.stderr || err.message}`);
+      console.log(`${prefix} [ERROR] ${song.name}: ${err.stderr || err.message}`);
       failed++;
     }
   }
 
-  console.log(`\n====== Done ======`);
+  console.log(`\n====== Finished ======`);
   console.log(`Downloaded: ${downloaded}`);
-  console.log(`Skipped:    ${skipped}`);
+  console.log(`Skipped:    ${skipped} (already exist)`);
   console.log(`Failed:     ${failed}`);
-  console.log(`Saved to:   ${outputDir}`);
+  console.log(`Location:   ${resolvedOutput}`);
 }
 
 main().catch((err) => {

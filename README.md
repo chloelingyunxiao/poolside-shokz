@@ -21,10 +21,28 @@ Happy swimming! 🏊
 ### 1. Download a playlist
 
 ```bash
-node download.js <apple_music_playlist_url>
+node download.js <apple_music_playlist_url> [options]
 ```
 
-Songs are saved to `./songs/` as MP3 files. Already-downloaded songs are skipped automatically.
+| Option | Values | Default | Description |
+|--------|--------|---------|-------------|
+| `--source` | `youtube`, `bilibili` | `youtube` | Where to download audio from |
+| `--output` | any path | `./songs` | Output directory for MP3 files |
+
+**Examples:**
+
+```bash
+# Default (YouTube)
+node download.js https://music.apple.com/us/playlist/swim/pl.u-xxx
+
+# Use Bilibili as source (recommended if YouTube is inaccessible)
+node download.js https://music.apple.com/us/playlist/swim/pl.u-xxx --source bilibili
+
+# Custom output directory
+node download.js https://music.apple.com/us/playlist/swim/pl.u-xxx --output ~/Desktop/songs
+```
+
+Songs are saved as MP3 files. Already-downloaded songs are skipped automatically.
 
 ### 2. Sync to Shokz earphone
 
