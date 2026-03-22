@@ -2,6 +2,14 @@
 
 Download songs from a public Apple Music playlist as MP3 files, then sync them to your Shokz earphone.
 
+## Background
+
+Shokz earphones support an offline MP3 mode for underwater use — since Bluetooth doesn't work underwater, you load music directly onto the device. But every time you want to update your swim playlist, you have to manually find the files, convert them, and drag them over. It's a pain.
+
+This tool makes it a two-command process: download your Apple Music playlist as MP3s, then sync to your earphone in one shot. Spend less time on your computer and more time in the pool.
+
+Happy swimming! 🏊
+
 ## Requirements
 
 - Node.js
